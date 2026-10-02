@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>설문조사</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1f2430;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --accent: #2f6fed;
+    --accent-soft: #e8efff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 40px 16px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 6px; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .q-num { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .q-title { font-size: 17px; font-weight: 600; margin-bottom: 16px; }
+  .options { display: grid; gap: 8px; }
+  .option {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .option:hover { border-color: var(--accent); }
+  .option input { accent-color: var(--accent); }
+  .option.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .btn {
+    width: 100%;
+    padding: 14px;
+    font-size: 16px; font-weight: 600;
+    color: #fff; background: var(--accent);
+    border: none; border-radius: 10px;
+    cursor: pointer;
+  }
+  .btn:disabled { background: #a9bdf5; cursor: not-allowed; }
+  .btn.ghost { background: transparent; color: var(--muted); font-size: 13px; font-weight: 400; margin-top: 8px; }
+  .hidden { display: none; }
+  .total { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .chart-box { position: relative; height: 280px; }
+  .done { text-align: center; font-size: 15px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="survey-title"></h1>
+  <p class="sub" id="survey-desc"></p>
+
+  <!-- 설문 화면 -->
+  <form id="survey-form">
+    <div id="questions"></div>
+    <button type="submit" class="btn" id="submit-btn" disabled>제출하고 결과 보기</button>
+  </form>
+
+  <!-- 결과 화면 -->
+  <div id="results" class="hidden">
+    <p class="done">응답해주셔서 감사합니다.</p>
+    <p class="total" id="total"></p>
+    <div id="charts"></div>
+    <button class="btn" id="again-btn">다시 응답하기</button>
+    <button class="btn ghost" id="reset-btn">전체 결과 초기화</button>
+  </div>
+</div>
+
+<script>
+/* ===== 여기만 수정하면 됩니다 ===== */
+const SURVEY = {
+  title: "간단 설문조사",
+  desc: "2개 문항, 30초면 끝나요.",
+  questions: [
+    {
+      title: "과제할 때 가장 많이 쓰는 AI 도구는?",
+      options: ["ChatGPT", "Claude", "Gemini", "기타", "안 씀"],
+      chart: "bar"        // bar 또는 doughnut
+    },
+    {
+      title: "팀 프로젝트에 AI를 쓰는 것에 대해 어떻게 생각하나요?",
+      options: ["적극 찬성", "찬성", "보통", "반대", "적극 반대"],
+      chart: "doughnut"
+    }
+  ]
+};
+/* ================================== */
+
+const STORAGE_KEY = "survey_results_v1";
+const COLORS = ["#2f6fed", "#22a06b", "#f5a524", "#e5484d", "#8e4ec6", "#0ea5b7", "#64748b"];
+
+function loadResults() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (saved && saved.length === SURVEY.questions.length) return saved;
+  } catch (e) {}
+  return SURVEY.questions.map(q => q.options.map(() => 0));
+}
+function saveResults(r) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(r)); } catch (e) {}
+}
+
+let results = loadResults();
+let charts = [];
+
+// 설문 렌더링
+document.getElementById("survey-title").textContent = SURVEY.title;
+document.getElementById("survey-desc").textContent = SURVEY.desc;
+const qWrap = document.getElementById("questions");
+
+SURVEY.questions.forEach((q, qi) => {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="q-num">Q${qi + 1}</div>
+    <div class="q-title">${q.title}</div>
+    <div class="options">
+      ${q.options.map((opt, oi) => `
+        <label class="option">
+          <input type="radio" name="q${qi}" value="${oi}">
+          <span>${opt}</span>
+        </label>`).join("")}
+    </div>`;
+  qWrap.appendChild(card);
+});
+
+// 선택 표시 + 제출 버튼 활성화
+const form = document.getElementById("survey-form");
+const submitBtn = document.getElementById("submit-btn");
+form.addEventListener("change", e => {
+  const name = e.target.name;
+  form.querySelectorAll(`input[name="${name}"]`).forEach(input => {
+    input.closest(".option").classList.toggle("selected", input.checked);
+  });
+  const allAnswered = SURVEY.questions.every((_, qi) => form.querySelector(`input[name="q${qi}"]:checked`));
+  submitBtn.disabled = !allAnswered;
+});
+
+// 제출
+form.addEventListener("submit", e => {
+  e.preventDefault();
+  SURVEY.questions.forEach((_, qi) => {
+    const v = Number(form.querySelector(`input[name="q${qi}"]:checked`).value);
+    results[qi][v]++;
+  });
+  saveResults(results);
+  showResults();
+});
+
+function showResults() {
+  form.classList.add("hidden");
+  document.getElementById("results").classList.remove("hidden");
+
+  const total = results[0].reduce((a, b) => a + b, 0);
+  document.getElementById("total").textContent = `총 응답 ${total}명`;
+
+  charts.forEach(c => c.destroy());
+  charts = [];
+  const box = document.getElementById("charts");
+  box.innerHTML = "";
+
+  SURVEY.questions.forEach((q, qi) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="q-num">Q${qi + 1}</div>
+      <div class="q-title">${q.title}</div>
+      <div class="chart-box"><canvas></canvas></div>`;
+    box.appendChild(card);
+
+    const isBar = q.chart !== "doughnut";
+    charts.push(new Chart(card.querySelector("canvas"), {
+      type: isBar ? "bar" : "doughnut",
+      data: {
+        labels: q.options,
+        datasets: [{
+          data: results[qi],
+          backgroundColor: isBar ? COLORS[0] : COLORS.slice(0, q.options.length),
+          borderRadius: isBar ? 6 : 0,
+          borderWidth: isBar ? 0 : 2
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: !isBar, position: "right" },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const pct = total ? Math.round(ctx.raw / total * 100) : 0;
+                return ` ${ctx.raw}명 (${pct}%)`;
+              }
+            }
+          }
+        },
+        scales: isBar ? { y: { beginAtZero: true, ticks: { precision: 0 } } } : {}
+      }
+    }));
+  });
+}
+
+// 다시 응답
+document.getElementById("again-btn").addEventListener("click", () => {
+  form.reset();
+  form.querySelectorAll(".option").forEach(o => o.classList.remove("selected"));
+  submitBtn.disabled = true;
+  document.getElementById("results").classList.add("hidden");
+  form.classList.remove("hidden");
+});
+
+// 초기화
+document.getElementById("reset-btn").addEventListener("click", () => {
+  if (!confirm("모든 응답 결과를 삭제할까요?")) return;
+  results = SURVEY.questions.map(q => q.options.map(() => 0));
+  saveResults(results);
+  showResults();
+});
+</script>
+</body>
+</html>
